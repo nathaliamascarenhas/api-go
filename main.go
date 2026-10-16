@@ -27,7 +27,7 @@ func Create(w http.ResponseWriter, r *http.Request) {
 	// verificar se a requisicao utiliza o metodo POST
 	if r.Method != http.MethodPost {
 		fmt.Println("Método não permitido")
-		http.Error(w, http.StatusText(405), http.StatusMethodNotAllowed)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -54,7 +54,8 @@ func Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// informar que o cadastro foi realizado com sucesso
-	w.WriteHeader(http.StatusCreated)
+	fmt.Fprintln(w, "Cadastro realizado com sucesso")
+	w.WriteHeader(http.StatusCreated) // 201
 }
 
 func Read(w http.ResponseWriter, r *http.Request) {
@@ -164,6 +165,39 @@ func Update(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "Usuário atualizado com sucesso")
 }
 
+func Delete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		fmt.Println("Método não permitido")
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	// pegar o id da url
+	id := r.PathValue("id")
+
+	res, err := db.Exec("DELETE FROM usuarios WHERE id = $1", id)
+	if err != nil {
+		log.Println("Erro ao deletar o usuário:", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	linhasModificadas, err := res.RowsAffected()
+	if err != nil {
+		log.Println("Erro ao verificar linhas modificadas:", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if linhasModificadas == 0 {
+		http.Error(w, "Nenhum usuário encontrado para deletar", http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, "Usuário deletado com sucesso")
+
+}
+
 func main() {
 	// string de conexão com o banco
 	connString := "postgres://postgres:stone@localhost:5432/crudb?sslmode=disable"
@@ -195,6 +229,7 @@ func main() {
 	mux.HandleFunc("POST /cadastrar", Create)
 	mux.HandleFunc("GET /usuarios", Read)
 	mux.HandleFunc("PUT /usuarios", Update)
+	mux.HandleFunc("DELETE /usuarios/{id}", Delete)
 
 	// iniciar o servidor HTTP na porta 8080
 	// (err não é obrigatorio) e verificar se o servidor iniciou corretamente
