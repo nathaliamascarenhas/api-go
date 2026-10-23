@@ -9,10 +9,11 @@ import (
 
 	"database/sql"
 	"log"
+	"strconv" // converter string para int
 )
 
 // estrutura do usuário que queremos salvar
-type Usuarios struct {
+type Usuario struct {
 	Id       int    `json:"id"`
 	Nome     string `json:"nome"`
 	Email    string `json:"email"`
@@ -32,13 +33,20 @@ func Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// criar uma variavel vazia para armazenar os dados dos usuarios
-	u := Usuarios{}
+	var u Usuario
 
 	// decodificar o JSON recebido no corpo da requisicao e armazenar os valores nos campos da struct Usuario
 	var err error
 	err = json.NewDecoder(r.Body).Decode(&u)
 	if err != nil {
 		fmt.Println("Erro ao decodificar JSON:", err)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
+	// Criar validação no endpoint de create para validar nome, email e telefone que sejam inseridos com string vazia
+	if u.Nome == "" || u.Email == "" || u.Telefone == "" {
+		fmt.Println("Nome, email e telefone são obrigatórios")
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
@@ -54,8 +62,8 @@ func Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// informar que o cadastro foi realizado com sucesso
-	fmt.Fprintln(w, "Cadastro realizado com sucesso")
 	w.WriteHeader(http.StatusCreated) // 201
+	fmt.Fprintln(w, "Cadastro realizado com sucesso")
 }
 
 func Read(w http.ResponseWriter, r *http.Request) {
@@ -66,9 +74,19 @@ func Read(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// pegar cursor (começa do 0 por default e delimita a partir de qual registro buscar no banco)
+	cursor, _ := strconv.Atoi(r.URL.Query().Get("cursor"))
+
+	// pegar o limite de registros que vão ser retornados
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 1000 // valor padrão caso não seja informado
+	}
+
 	// executar uma consulta para buscar todos os usuarios
 	rows, err := db.Query(
-		"SELECT id, nome, email, telefone FROM usuarios",
+		"SELECT id, nome, email, telefone FROM usuarios WHERE id > $1 ORDER BY id ASC LIMIT $2",
+		cursor, limit,
 	)
 	if err != nil {
 		log.Println("Erro ao consultar o banco dados:", err)
@@ -80,11 +98,11 @@ func Read(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	// criar uma slice vazia para armazenar os usuarios encontrados
-	usuarios := []Usuarios{}
+	var usuarios []Usuario
 
 	// percorrer cada linha retornada pelo banco de dados
 	for rows.Next() {
-		u := Usuarios{}
+		var u Usuario
 
 		// copiar os valores da linha para os campos da struct Usuario
 		err := rows.Scan(&u.Id, &u.Nome, &u.Email, &u.Telefone)
@@ -121,7 +139,7 @@ func Read(w http.ResponseWriter, r *http.Request) {
 }
 
 func Update(w http.ResponseWriter, r *http.Request) {
-	u := Usuarios{}
+	var u Usuario
 
 	var err error
 	err = json.NewDecoder(r.Body).Decode(&u)
@@ -198,6 +216,68 @@ func Delete(w http.ResponseWriter, r *http.Request) {
 
 }
 
+// Criar um endpoint de find para buscar pelo nome
+func FindByName(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fmt.Println("Método não permitido")
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	// pegar o nome
+	nome := r.URL.Query().Get("nome")
+	if nome == "" {
+		http.Error(w, "Nome é obrigatório", http.StatusBadRequest)
+		return
+	}
+
+	// buscar usuários pelo nome no banco de dados
+	rows, err := db.Query("SELECT id, nome, email, telefone FROM usuarios WHERE nome ILIKE $1 LIMIT 100", "%"+nome+"%")
+	if err != nil {
+		log.Println("Erro ao buscar usuários:", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	defer rows.Close()
+
+	var usuarios []Usuario
+	for rows.Next() {
+		var u Usuario
+		err := rows.Scan(&u.Id, &u.Nome, &u.Email, &u.Telefone)
+		if err != nil {
+			log.Println("Erro ao ler usuário:", err)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		usuarios = append(usuarios, u)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		log.Println("Erro ao iterar sobre os usuários:", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	if len(usuarios) == 0 {
+		http.Error(w, "Nenhum usuário encontrado", http.StatusNotFound)
+		return
+	}
+
+	// informar que a resposta sera um JSON
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	// converter a lista de usuarios para JSON e enviar na resposta
+	err = json.NewEncoder(w).Encode(usuarios)
+	if err != nil {
+		log.Println("Erro ao codificar JSON:", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+}
+
 func main() {
 	// string de conexão com o banco
 	connString := "postgres://postgres:stone@localhost:5432/crudb?sslmode=disable"
@@ -227,6 +307,7 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /cadastrar", Create)
+	mux.HandleFunc("GET /usuarios/nome", FindByName)
 	mux.HandleFunc("GET /usuarios", Read)
 	mux.HandleFunc("PUT /usuarios", Update)
 	mux.HandleFunc("DELETE /usuarios/{id}", Delete)
